@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin Dashboard - Patient Info</title>
+  <link rel="stylesheet" href="dashboardcss.css">
+  <style>
+    table {
+      table-layout: fixed;
+      width: 100%; /* Ensure it spans the entire container */
+    }
+
+    /* Loader animation for the download button */
+    .download-loading {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid #3498db;
+      border-radius: 50%;
+      width: 50px;
+      height: 50px;
+      animation: spin 2s linear infinite;
+    }
+
+    @keyframes spin {
+      0% { transform: translate(-50%, -50%) rotate(0deg); }
+      100% { transform: translate(-50%, -50%) rotate(360deg); }
+    }
+
+    /* Make the download button disabled during the loading state */
+    .btn-download:disabled {
+      cursor: not-allowed;
+      opacity: 0.6;
+    }
+  </style>
+</head>
+<body>
+  <div class="dashboard-container">
+    <header>
+      <div class="search-box">
+        <input type="text" id="searchInput" placeholder="Search by Patient ID" />
+        <button id="searchBtn">Search</button>
+      </div>
+      
+      <!-- Download PDF Button -->
+      <button id="downloadPdfBtn" class="btn-download">Download PDF</button>
+    </header>
+
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Patient ID</th>
+            <th>Name</th>
+            <th>Age</th>
+            <th>Factor Type</th>
+            <th>Factor Level</th>
+            <th>Phone</th>
+            <th>Home Town</th>
+            <th>NID</th> <!-- New NID column -->
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="patientsTable">
+          <!-- Patient rows will be dynamically inserted here -->
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Modal for Editing Patient Info -->
+  <div class="modal" id="editModal">
+    <div class="modal-content">
+      <div class="modal-header">Edit Patient Information</div>
+      <div class="modal-body">
+        <input type="hidden" id="editPatientId" />
+        <label for="editName">Name:</label>
+        <input type="text" id="editName" />
+        <label for="editAge">Age:</label>
+        <input type="number" id="editAge" />
+        <label for="editFactorType">Factor Type:</label>
+        <select id="editFactorType">
+          <option value="Factor 8">Factor 8</option>
+          <option value="Factor 9">Factor 9</option>
+          <option value="Factor Level VWD"> VWD</option>
+          <option value="Others">Others</option>
+        </select>
+        <label for="editFactorLevel">Factor Level:</label>
+        <input type="text" id="editFactorLevel" />
+        <label for="editPhone">Phone:</label>
+        <input type="tel" id="editPhone" />
+        <label for="editHometown">Home Town:</label>
+        <input type="text" id="editHometown" />
+        <label for="editNid">NID:</label> <!-- New NID input -->
+        <input type="text" id="editNid" />
+      </div>
+      <div class="modal-footer">
+        <button class="btn-save" id="saveBtn">Save Changes</button>
+        <button class="btn-cancel" id="cancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Include jsPDF library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.3.1/firebase-app.js";
+    import {
+      getDatabase,
+      ref,
+      onValue,
+      get,
+      update,
+      remove
+    } from "https://www.gstatic.com/firebasejs/11.3.1/firebase-database.js";
+
+    // Firebase Configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyDiYYd00e0tuP04Rh9yMRyY1n29AdVxy0s",
+      authDomain: "hsb-patient-info-server.firebaseapp.com",
+      projectId: "hsb-patient-info-server",
+      storageBucket: "hsb-patient-info-server.firebasestorage.app",
+      messagingSenderId: "961640364490",
+      appId: "1:961640364490:web:fe98a28850659e7cf3f733"
+    };
+
+    // Initialize Firebase
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+    const patientsRef = ref(db, 'patients');
+
+    // Function to render all patients in the table with Edit and Delete buttons per row
+    function renderPatients(snapshot) {
+      const tbody = document.getElementById('patientsTable');
+      tbody.innerHTML = ''; // Clear existing data
+      snapshot.forEach(childSnapshot => {
+        const data = childSnapshot.val();
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${data.patientId}</td>
+          <td>${data.name}</td>
+          <td>${data.age}</td>
+          <td>${data.factorType}</td>
+          <td>${data.factorLevel}</td>
+          <td>${data.phone}</td>
+          <td>${data.hometown}</td>
+          <td>${data.nid || 'N/A'}</td> <!-- Show NID if available, else show 'N/A' -->
+          <td>
+            <button class="edit-btn" data-id="${data.patientId}">Edit</button>
+            <button class="delete-btn" data-id="${data.patientId}">Delete</button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      // Add event listeners for all Edit and Delete buttons
+      document.querySelectorAll('.edit-btn').forEach(button => {
+        button.addEventListener('click', (e) => {
+          const patientId = e.target.getAttribute('data-id');
+          openEditModal(patientId);
+        });
+      });
+
+      document.querySelectorAll('.delete-btn').forEach(button => {
+        button.addEventListener('click', (e) => {
+          const patientId = e.target.getAttribute('data-id');
+          deletePatient(patientId);
+        });
+      });
+    }
+
+    // Fetch and display patients in real-time
+    onValue(patientsRef, (snapshot) => {
+      renderPatients(snapshot);
+    });
+
+    // Search functionality (find patient by ID)
+    document.getElementById("searchBtn").addEventListener("click", () => {
+      const searchValue = document.getElementById("searchInput").value.trim();
+      if (!searchValue) {
+        alert("Please enter a Patient ID to search.");
+        return;
+      }
+
+      get(patientsRef).then((snapshot) => {
+        const tbody = document.getElementById('patientsTable');
+        tbody.innerHTML = ''; // Clear previous results
+
+        let found = false;
+        snapshot.forEach(childSnapshot => {
+          const data = childSnapshot.val();
+          if (data.patientId === searchValue) {  // Match by Patient ID
+            found = true;
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td>${data.patientId}</td>
+              <td>${data.name}</td>
+              <td>${data.age}</td>
+              <td>${data.factorType}</td>
+              <td>${data.factorLevel}</td>
+              <td>${data.phone}</td>
+              <td>${data.hometown}</td>
+              <td>${data.nid || 'N/A'}</td> <!-- Show NID if available, else show 'N/A' -->
+              <td>
+                <button class="edit-btn" data-id="${data.patientId}">Edit</button>
+                <button class="delete-btn" data-id="${data.patientId}">Delete</button>
+              </td>
+            `;
+            tbody.appendChild(tr);
+
+            // Attach event for Edit button in the search result
+            tr.querySelector(".edit-btn").addEventListener("click", () => {
+              openEditModal(data.patientId);
+            });
+            // Attach event for Delete button in the search result
+            tr.querySelector(".delete-btn").addEventListener("click", () => {
+              deletePatient(data.patientId);
+            });
+          }
+        });
+
+        if (!found) {
+          tbody.innerHTML = '<tr><td colspan="9">No patient found with this ID.</td></tr>';
+        }
+      }).catch((error) => {
+        console.error("Error fetching patient data:", error);
+      });
+    });
+
+    // Modal Elements
+    const editModal = document.getElementById('editModal');
+    const cancelBtn = document.getElementById('cancelBtn');
+    const saveBtn = document.getElementById('saveBtn');
+
+    // Open Edit Modal & Populate Fields
+    function openEditModal(patientId) {
+      // Get patient data from Firebase
+      const patientRef = ref(db, `patients/${patientId}`);
+      get(patientRef).then((snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          document.getElementById('editPatientId').value = data.patientId;
+          document.getElementById('editName').value = data.name;
+          document.getElementById('editAge').value = data.age;
+          document.getElementById('editFactorType').value = data.factorType;
+          document.getElementById('editFactorLevel').value = data.factorLevel;
+          document.getElementById('editPhone').value = data.phone;
+          document.getElementById('editHometown').value = data.hometown;
+          document.getElementById('editNid').value = data.nid || ''; // Display NID if available
+          editModal.classList.add('active');
+        } else {
+          alert("Patient not found.");
+        }
+      }).catch((error) => {
+        console.error("Error fetching patient data:", error);
+      });
+    }
+
+    // Close Modal
+    cancelBtn.addEventListener('click', () => {
+      editModal.classList.remove('active');
+    });
+
+    // Save Edited Patient Info
+    saveBtn.addEventListener('click', () => {
+      const patientId = document.getElementById('editPatientId').value;
+      const updatedData = {
+        patientId,
+        name: document.getElementById('editName').value,
+        age: document.getElementById('editAge').value,
+        factorType: document.getElementById('editFactorType').value,
+        factorLevel: document.getElementById('editFactorLevel').value,
+        phone: document.getElementById('editPhone').value,
+        hometown: document.getElementById('editHometown').value,
+        nid: document.getElementById('editNid').value, // NID field
+      };
+
+      update(ref(db, 'patients/' + patientId), updatedData).then(() => {
+        alert('Patient info updated successfully!');
+        editModal.classList.remove('active');
+      }).catch((error) => {
+        console.error("Error updating patient info:", error);
+      });
+    });
+
+    // Delete Patient
+    function deletePatient(patientId) {
+      if (confirm("Are you sure you want to delete this patient?")) {
+        remove(ref(db, 'patients/' + patientId)).then(() => {
+          alert("Patient deleted successfully.");
+        }).catch((error) => {
+          console.error("Error deleting patient:", error);
+        });
+      }
+    }
+
+    // PDF Download Logic with NID
+    document.getElementById("downloadPdfBtn").addEventListener("click", () => {
+      const downloadBtn = document.getElementById("downloadPdfBtn");
+      downloadBtn.disabled = true; // Disable button during download
+
+      // Create a loading spinner
+      const spinner = document.createElement("div");
+      spinner.classList.add("download-loading");
+      document.body.appendChild(spinner);
+
+      // Initialize jsPDF
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF();
+
+      let y = 20;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8); // Smaller font size
+
+      doc.text("Patient Information Report HEMOPHILIA SOCIETY OF BANGLADESH", 4, y);
+      y += 10;
+
+      // Custom header for PDF (added NID)
+      const customHeader = ["Patient ID", "Name", "Age", "Factor Type", "Factor Level", "Phone", "Home Town", "NID"];
+      
+      // Prepare table data for PDF
+      const data = [];
+      for (let i = 1; i < document.getElementById("patientsTable").rows.length; i++) {
+        const rowData = [];
+        for (let j = 0; j < document.getElementById("patientsTable").rows[i].cells.length - 1; j++) {
+          rowData.push(document.getElementById("patientsTable").rows[i].cells[j].innerText);
+        }
+        data.push(rowData);
+      }
+
+      const tableWidth = 170;
+      const columnWidth = tableWidth / customHeader.length;
+      const nameColumnWidth = 54;
+      const cellHeight = 6;
+      const ageColumnWidth = 10;
+      const nidColumnWidth = 33; 
+      const marginLeft = 2;
+
+      const columnWidths = customHeader.map((header, index) => {
+        if (index === 1) return nameColumnWidth; // "Name" column
+        if (index === 2) return ageColumnWidth; // "Age" column with smaller width
+        if (index === 7) return nidColumnWidth; // "NID" column with increased width
+        return columnWidth; // All other columns
+      });
+
+      doc.setTextColor(0, 0, 0);
+      customHeader.forEach((header, index) => {
+        const xPosition = marginLeft + columnWidths.slice(0, index).reduce((a, b) => a + b, 0);
+        doc.rect(xPosition, y, columnWidths[index], cellHeight);
+        doc.text(header, xPosition + 2, y + 4);
+      });
+      y += cellHeight;
+
+      // Draw the data rows
+      data.forEach((row) => {
+        row.forEach((cell, index) => {
+          const xPosition = marginLeft + columnWidths.slice(0, index).reduce((a, b) => a + b, 0);
+          doc.rect(xPosition, y, columnWidths[index], cellHeight);
+          doc.text(cell, xPosition + 2, y + 4);
+        });
+        y += cellHeight;
+      });
+
+      setTimeout(() => {
+        doc.save("patients_report.pdf");
+
+        document.body.removeChild(spinner);
+        downloadBtn.disabled = false;
+      }, 1500);
+    });
+  </script>
+</body>
+</html>
